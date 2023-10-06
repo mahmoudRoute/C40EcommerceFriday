@@ -4,6 +4,8 @@ import couponModel from '../../../../DB/model/Coupon.model.js'
 import { clearCart, removeItems } from "../../cart/controller/cart.js";
 import orderModel from "../../../../DB/model/Order.model.js";
 import cartModel from "../../../../DB/model/Cart.model.js";
+import payment from "../../../utils/payment.js";
+import Stripe from "stripe";
 
 // export const createOrderDummyOrder = asyncHandler(async (req, res, next) => {
 //     const { products, paymentType, note, address, phone, couponName } = req.body;
@@ -141,6 +143,42 @@ export const createOrder = asyncHandler(async (req, res, next) => {
     req.body.isCart ? await clearCart(req.user._id) : await removeItems(req.user._id, productIds)
 
 
+    if (paymentType == 'card') {
+
+        const stripe = new Stripe(process.env.STRIPE_KEY)
+        if (req.body.coupon) {
+            const coupon = await stripe.coupons.create({ percent_off: req.body.coupon.amount, duration: 'once' })
+            console.log({ coupon });
+            req.body.couponId = coupon.id
+        }
+
+        const session = await payment({
+            stripe,
+            customer_email: req.user.email,
+            metadata: {
+                orderId: order._id.toString()
+            },
+            cancel_url: `${process.env.CANCEL_URL}/${order._id.toString()}`,
+            success_url: `${process.env.SUCCESS_URL}`,
+            line_items: order.products.map(product => {
+                return {
+                    price_data: {
+                        currency: 'usd',
+                        product_data: {
+                            name: product.name
+                        },
+                        unit_amount: product.unitPrice * 100
+                    },
+                    quantity: product.quantity
+                }
+
+            }),
+            discounts: req.body.couponId ? [{ coupon: req.body.couponId }] : []
+        })
+        return res.status(201).json({ message: "Done", order, session })
+
+    }
+
     return res.status(201).json({ message: "Done", order })
 
 
@@ -181,5 +219,29 @@ export const cancelOrder = asyncHandler(async (req, res, next) => {
     }
 
     const cart = await cartModel.findOneAndUpdate({ userId: req.user._id }, { products: order.products }, { new: true })
-    return res.status(200).json({ message: "Done", order , cart })
+    return res.status(200).json({ message: "Done", order, cart })
+})
+
+export const webhook = asyncHandler(async (req, res, next) => {
+    const sig = req.headers['stripe-signature'];
+
+    const stripe = new Stripe(process.env.STRIPE_KEY)
+    let event;
+
+    try {
+
+        event = stripe.webhooks.constructEvent(req.body, sig, process.env.endpointSecret);
+    } catch (err) {
+        res.status(400).send(`Webhook Error: ${err.message}`);
+        return;
+    }
+
+    const { orderId } = event.data.object.metadata
+    if (event.type != 'checkout.session.completed') {
+        await orderModel.updateOne({ _id: orderId }, { status: "rejected", reason: 'fail payment' })
+        return res.status(400).json({ message: "payment failed and order rejected" })
+    }
+
+    await orderModel.updateOne({ _id: orderId }, { status: "placed" })
+    return res.status(200).json({ message: "Done" })
 })

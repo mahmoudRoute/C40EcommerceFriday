@@ -46,7 +46,7 @@ const initApp = (app, express) => {
     //             await res.header('Access-Control-Allow-Origin', origin);
     //             await res.header('Access-Control-Allow-Headers', '*')
     //             await res.header("Access-Control-Allow-Private-Network", 'true')
-                // await res.header('Access-Control-Allow-Methods', 'GET , POST')
+    // await res.header('Access-Control-Allow-Methods', 'GET , POST')
     //             return next()
     //         }
     //     }
@@ -55,8 +55,15 @@ const initApp = (app, express) => {
 
     // })
     //convert Buffer Data
+    app.use((req, res, next) => {
 
-    app.use(express.json())
+        console.log({ originalUrl: req.originalUrl });
+        if (req.originalUrl == '/order/webhook') {
+            next()
+        } else {
+            express.json()(req, res, next)
+        }
+    })
     //Setup API Routing 
     app.get("/", (req, res, next) => {
         return res.status(200).json({ message: "Welcome to E-commerce APP C40  online" })
